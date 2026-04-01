@@ -1,0 +1,214 @@
+<!--
+=======================================================
+  NOTIFICATION BELL WIDGET
+  Paste this into your student header or dashboard nav.
+  Requires Bootstrap Icons already loaded.
+=======================================================
+-->
+
+<!-- 1. Bell icon (put this in your nav) -->
+<a href="notifications.php" class="notif-bell" id="notifBell" title="Notifications">
+    <i class="bi bi-bell-fill"></i>
+    <span class="notif-badge" id="notifBadge" style="display:none">0</span>
+</a>
+
+<!-- 2. Toast container (put once, just before </body>) -->
+<div id="notifToastWrap" style="
+    position:fixed;bottom:1.5rem;right:1.5rem;
+    z-index:9999;display:flex;flex-direction:column;gap:.6rem;
+    pointer-events:none;
+"></div>
+
+<!-- 3. Styles (add to your shared CSS or <style> block) -->
+<style>
+    .notif-bell {
+        position: relative;
+        display: inline-flex;
+        align-items: center;
+        color: #8b949e;
+        font-size: 1.2rem;
+        text-decoration: none;
+        transition: color .18s;
+        padding: .3rem
+    }
+    
+    .notif-bell:hover {
+        color: #58a6ff
+    }
+    
+    .notif-badge {
+        position: absolute;
+        top: -2px;
+        right: -2px;
+        background: #f85149;
+        color: #fff;
+        font-size: .6rem;
+        font-weight: 700;
+        min-width: 16px;
+        height: 16px;
+        border-radius: 20px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 0 3px;
+        pointer-events: none;
+        font-family: 'DM Mono', monospace;
+    }
+    /* Toast */
+    
+    .notif-toast {
+        background: #161b22;
+        border: 1px solid #30363d;
+        border-radius: 10px;
+        padding: .75rem 1rem;
+        display: flex;
+        gap: .65rem;
+        align-items: flex-start;
+        min-width: 260px;
+        max-width: 320px;
+        pointer-events: all;
+        animation: toastIn .3s ease both;
+        box-shadow: 0 8px 30px rgba(0, 0, 0, .5)
+    }
+    
+    @keyframes toastIn {
+        from {
+            opacity: 0;
+            transform: translateX(40px)
+        }
+        to {
+            opacity: 1;
+            transform: none
+        }
+    }
+    
+    @keyframes toastOut {
+        from {
+            opacity: 1
+        }
+        to {
+            opacity: 0;
+            transform: translateX(40px)
+        }
+    }
+    
+    .toast-icon {
+        width: 32px;
+        height: 32px;
+        border-radius: 8px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: .9rem;
+        flex-shrink: 0
+    }
+    
+    .toast-icon.info {
+        background: rgba(88, 166, 255, .15);
+        color: #58a6ff
+    }
+    
+    .toast-icon.success {
+        background: rgba(63, 185, 80, .15);
+        color: #3fb950
+    }
+    
+    .toast-icon.warning {
+        background: rgba(210, 153, 34, .15);
+        color: #d29922
+    }
+    
+    .toast-icon.danger {
+        background: rgba(248, 81, 73, .15);
+        color: #f85149
+    }
+    
+    .toast-body {
+        flex: 1;
+        min-width: 0
+    }
+    
+    .toast-label {
+        font-size: .65rem;
+        text-transform: uppercase;
+        letter-spacing: .07em;
+        font-weight: 700;
+        color: #8b949e;
+        margin-bottom: .15rem
+    }
+    
+    .toast-title {
+        font-size: .84rem;
+        font-weight: 700;
+        color: #e6edf3;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis
+    }
+</style>
+
+<!-- 4. Script (add before </body>) -->
+<script>
+    (function() {
+        const badge = document.getElementById('notifBadge');
+        const toastWrap = document.getElementById('notifToastWrap');
+        let lastCount = 0;
+
+        const typeIcons = {
+            info: 'bi-info-circle-fill',
+            success: 'bi-check-circle-fill',
+            warning: 'bi-exclamation-triangle-fill',
+            danger: 'bi-x-octagon-fill'
+        };
+
+        function showToast(title, type) {
+            const icon = typeIcons[type] || 'bi-bell-fill';
+            const el = document.createElement('div');
+            el.className = 'notif-toast';
+            el.innerHTML = `
+            <div class="toast-icon ${type}"><i class="bi ${icon}"></i></div>
+            <div class="toast-body">
+                <div class="toast-label">New Notification</div>
+                <div class="toast-title">${title}</div>
+            </div>`;
+            toastWrap.appendChild(el);
+            // Auto-dismiss after 5s
+            setTimeout(() => {
+                el.style.animation = 'toastOut .3s ease forwards';
+                setTimeout(() => el.remove(), 320);
+            }, 5000);
+        }
+
+        function updateBadge(count) {
+            if (count > 0) {
+                badge.textContent = count > 99 ? '99+' : count;
+                badge.style.display = 'flex';
+            } else {
+                badge.style.display = 'none';
+            }
+        }
+
+        function poll() {
+            fetch('../api/get_notification_count.php')
+                .then(r => r.json())
+                .then(data => {
+                    updateBadge(data.count);
+                    // Show toast only when count increases
+                    if (data.count > lastCount && data.latest) {
+                        showToast(data.latest.title, data.latest.type);
+                    }
+                    lastCount = data.count;
+                })
+                .catch(() => {}); // Silently fail — don't break the page
+        }
+
+        // Initial poll + every 30 seconds
+        poll();
+        setInterval(poll, 30000);
+
+        // Mark as seen when clicking bell
+        document.getElementById('notifBell') ? .addEventListener('click', () => {
+            fetch('../api/mark_notifications_seen.php').catch(() => {});
+        });
+    })();
+</script>

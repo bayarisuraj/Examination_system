@@ -1,0 +1,428 @@
+<?php
+session_start();
+
+// Auth guard
+if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'lecturer') {
+    header("Location: ../auth/login.php");
+    exit();
+}
+
+// Load database
+require_once '../config/db.php'; // <- corrected path
+
+$lecturer_id  = $_SESSION['user_id'];
+$lecturer_name = $_SESSION['full_name'] ?? 'Lecturer';
+
+
+// ── Handle Publish / Unpublish Results ────────────────────────────
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['toggle_result_publish'])) {
+    $eid        = (int)($_POST['exam_id'] ?? 0);
+    $new_val    = (int)($_POST['new_published'] ?? 0);
+    $stmt = $conn->prepare("
+        UPDATE exams SET result_published = ?
+        WHERE id = ? AND created_by = ?
+    ");
+    $stmt->bind_param("iii", $new_val, $eid, $lecturer_id);
+    $stmt->execute();
+    $stmt->close();
+    header("Location: results.php");
+    exit();
+}
+
+// ── Fetch courses for filter dropdown ────────────────────────────
+$stmt = $conn->prepare("
+    SELECT DISTINCT c.id, c.course_name
+    FROM courses c
+    WHERE c.lecturer_id = ?
+    ORDER BY c.course_name ASC
+");
+$stmt->bind_param("i", $lecturer_id);
+$stmt->execute();
+$course_result = $stmt->get_result();
+$stmt->close();
+
+// ── Fetch exams with their result_published status ───────────────
+$stmt = $conn->prepare("
+    SELECT e.id, e.title, e.result_published, c.course_name
+    FROM exams e
+    JOIN courses c ON c.id = e.course_id
+    WHERE e.created_by = ?
+    ORDER BY e.exam_date DESC
+");
+$stmt->bind_param("i", $lecturer_id);
+$stmt->execute();
+$exams_result = $stmt->get_result();
+$exams_list   = $exams_result->fetch_all(MYSQLI_ASSOC);
+$stmt->close();
+?>
+
+<?php include "../includes/header.php"; ?>
+
+<style>
+/* ── Page Layout ── */
+.results-wrap { max-width: 1100px; margin: 0 auto; }
+
+/* ── Filter Bar ── */
+.filter-card {
+    background: #fff;
+    border-radius: 14px;
+    padding: 1.2rem 1.5rem;
+    box-shadow: 0 3px 14px rgba(0,0,0,0.07);
+    margin-bottom: 1.5rem;
+}
+
+/* ── Results Table ── */
+.results-card {
+    background: #fff;
+    border-radius: 14px;
+    overflow: hidden;
+    box-shadow: 0 3px 14px rgba(0,0,0,0.07);
+}
+.results-table thead {
+    background: #343a40;
+    color: #fff;
+}
+.results-table th, .results-table td {
+    padding: 12px 16px;
+    vertical-align: middle;
+    font-size: 0.9rem;
+}
+.results-table tbody tr:hover { background: #f0f8ff; transition: 0.2s; }
+
+/* ── Score Badge ── */
+.score-badge {
+    font-size: 0.82rem;
+    padding: 4px 12px;
+    border-radius: 20px;
+    font-weight: 700;
+}
+
+/* ── Spinner ── */
+#loadingSpinner {
+    display: none;
+    text-align: center;
+    padding: 2rem;
+}
+
+/* ── Summary Cards ── */
+.summary-card {
+    border-radius: 12px;
+    border: none;
+    padding: 1rem;
+    text-align: center;
+    transition: transform 0.2s;
+}
+.summary-card:hover { transform: translateY(-3px); }
+.summary-number { font-size: 1.8rem; font-weight: 700; }
+.summary-label  { font-size: 0.8rem; color: #888; margin-top: 2px; }
+
+/* ── Publish Panel ── */
+.publish-panel {
+    background: #fff;
+    border-radius: 14px;
+    padding: 1.25rem 1.5rem;
+    box-shadow: 0 3px 14px rgba(0,0,0,0.07);
+    margin-bottom: 1.5rem;
+}
+.publish-panel h6 {
+    font-weight: 700;
+    font-size: 0.9rem;
+    color: #343a40;
+    margin-bottom: 0.85rem;
+}
+.publish-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.55rem 0.75rem;
+    border-radius: 10px;
+    border: 1px solid #e9ecef;
+    margin-bottom: 0.5rem;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+}
+.publish-row:last-child { margin-bottom: 0; }
+.publish-exam-name {
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: #343a40;
+    flex: 1;
+}
+.publish-course-name {
+    font-size: 0.75rem;
+    color: #888;
+}
+.publish-status-badge {
+    font-size: 0.72rem;
+    font-weight: 700;
+    padding: 3px 10px;
+    border-radius: 20px;
+}
+.badge-published { background: #d1fae5; color: #065f46; }
+.badge-hidden    { background: #f3f4f6; color: #6b7280; }
+
+.btn-publish   { background: #16a34a; border-color: #16a34a; color: #fff; font-size: 0.78rem; }
+.btn-unpublish { background: #dc2626; border-color: #dc2626; color: #fff; font-size: 0.78rem; }
+.btn-publish:hover   { background: #15803d; }
+.btn-unpublish:hover { background: #b91c1c; }
+
+/* ── Mobile Responsive Table ── */
+@media(max-width: 768px){
+    .results-table thead { display: none; }
+    .results-table, .results-table tbody,
+    .results-table tr, .results-table td { display: block; width: 100%; }
+    .results-table tr { margin-bottom: 14px; border-bottom: 2px solid #f0f0f0; }
+    .results-table td {
+        text-align: right;
+        padding-left: 50%;
+        position: relative;
+    }
+    .results-table td::before {
+        content: attr(data-label);
+        position: absolute;
+        left: 15px;
+        width: 45%;
+        font-weight: 600;
+        text-align: left;
+        color: #555;
+    }
+    .publish-row { flex-direction: column; align-items: flex-start; }
+}
+</style>
+
+<div class="container-fluid px-4 py-4">
+<div class="results-wrap">
+
+    <!-- Page Header -->
+    <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+        <div>
+            <h2 class="fw-bold mb-0">
+                <i class="bi bi-bar-chart-fill text-primary"></i> Student Results
+            </h2>
+            <p class="text-muted small mb-0">View, filter, and publish results to students</p>
+        </div>
+        <a href="dashboard.php" class="btn btn-outline-secondary btn-sm">
+            <i class="bi bi-arrow-left"></i> Dashboard
+        </a>
+    </div>
+
+    <!-- Summary Cards -->
+    <div class="row g-3 mb-4" id="summaryRow">
+        <div class="col-6 col-md-3">
+            <div class="summary-card bg-primary text-white shadow-sm">
+                <div class="summary-number" id="totalCount">—</div>
+                <div class="summary-label">Total Attempts</div>
+            </div>
+        </div>
+        <div class="col-6 col-md-3">
+            <div class="summary-card bg-success text-white shadow-sm">
+                <div class="summary-number" id="avgScore">—</div>
+                <div class="summary-label">Average Score</div>
+            </div>
+        </div>
+        <div class="col-6 col-md-3">
+            <div class="summary-card bg-warning text-dark shadow-sm">
+                <div class="summary-number" id="highScore">—</div>
+                <div class="summary-label">Highest Score</div>
+            </div>
+        </div>
+        <div class="col-6 col-md-3">
+            <div class="summary-card bg-danger text-white shadow-sm">
+                <div class="summary-number" id="lowScore">—</div>
+                <div class="summary-label">Lowest Score</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ── Publish Results Panel ── -->
+    <div class="publish-panel">
+        <h6><i class="bi bi-megaphone-fill text-success me-2"></i>Publish Results to Students</h6>
+        <p class="text-muted small mb-3">
+            Students can only see their result after you publish it.
+            Toggle per exam below.
+        </p>
+
+        <?php if (empty($exams_list)): ?>
+            <p class="text-muted small fst-italic">No exams found.</p>
+        <?php else: ?>
+            <?php foreach ($exams_list as $ex): ?>
+            <div class="publish-row">
+                <div>
+                    <div class="publish-exam-name"><?= htmlspecialchars($ex['title']) ?></div>
+                    <div class="publish-course-name"><?= htmlspecialchars($ex['course_name']) ?></div>
+                </div>
+                <span class="publish-status-badge <?= $ex['result_published'] ? 'badge-published' : 'badge-hidden' ?>">
+                    <?= $ex['result_published'] ? '✓ Published' : 'Hidden' ?>
+                </span>
+                <form method="POST" action="results.php" style="display:inline">
+                    <input type="hidden" name="exam_id"       value="<?= (int)$ex['id'] ?>">
+                    <input type="hidden" name="new_published" value="<?= $ex['result_published'] ? 0 : 1 ?>">
+                    <button type="submit" name="toggle_result_publish"
+                            class="btn btn-sm <?= $ex['result_published'] ? 'btn-unpublish' : 'btn-publish' ?>">
+                        <i class="bi bi-<?= $ex['result_published'] ? 'eye-slash' : 'megaphone' ?>"></i>
+                        <?= $ex['result_published'] ? 'Hide Results' : 'Publish Results' ?>
+                    </button>
+                </form>
+            </div>
+            <?php endforeach; ?>
+        <?php endif; ?>
+    </div>
+
+    <!-- Filter Bar -->
+    <div class="filter-card">
+        <div class="row g-3 align-items-end">
+            <div class="col-md-5">
+                <label class="form-label fw-semibold small">Search Student</label>
+                <div class="input-group">
+                    <span class="input-group-text"><i class="bi bi-search"></i></span>
+                    <input type="text" id="searchInput" class="form-control"
+                           placeholder="Type student name...">
+                </div>
+            </div>
+            <div class="col-md-4">
+                <label class="form-label fw-semibold small">Filter by Course</label>
+                <select id="courseSelect" class="form-select">
+                    <option value="">All Courses</option>
+                    <?php while($c = $course_result->fetch_assoc()): ?>
+                        <option value="<?= $c['id'] ?>">
+                            <?= htmlspecialchars($c['course_name']) ?>
+                        </option>
+                    <?php endwhile; ?>
+                </select>
+            </div>
+            <div class="col-md-3">
+                <button class="btn btn-outline-secondary w-100" onclick="clearFilters()">
+                    <i class="bi bi-x-circle me-1"></i> Clear Filters
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Results Table -->
+    <div class="results-card">
+
+        <!-- Loading Spinner -->
+        <div id="loadingSpinner">
+            <div class="spinner-border text-primary" role="status">
+                <span class="visually-hidden">Loading...</span>
+            </div>
+            <p class="text-muted small mt-2">Fetching results...</p>
+        </div>
+
+        <div class="table-responsive" id="tableWrap">
+            <table class="table results-table mb-0">
+                <thead>
+                    <tr>
+                        <th class="ps-3">#</th>
+                        <th data-label="Exam">Exam</th>
+                        <th data-label="Course">Course</th>
+                        <th data-label="Student">Student</th>
+                        <th data-label="Score">Score</th>
+                        <th data-label="Grade">Grade</th>
+                        <th data-label="Published">Result Visible</th>
+                        <th data-label="Submitted">Date Submitted</th>
+                    </tr>
+                </thead>
+                <tbody id="resultsBody">
+                    <tr>
+                        <td colspan="8" class="text-center text-muted py-4">
+                            <div class="spinner-border spinner-border-sm text-primary me-2"></div>
+                            Loading results...
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+    </div>
+
+</div>
+</div>
+
+<script>
+const searchInput  = document.getElementById('searchInput');
+const courseSelect = document.getElementById('courseSelect');
+const resultsBody  = document.getElementById('resultsBody');
+const spinner      = document.getElementById('loadingSpinner');
+const tableWrap    = document.getElementById('tableWrap');
+
+let debounceTimer;
+
+function showLoading(){
+    spinner.style.display = 'block';
+    tableWrap.style.display = 'none';
+}
+function hideLoading(){
+    spinner.style.display = 'none';
+    tableWrap.style.display = 'block';
+}
+
+function updateSummary(rows){
+    const scores = [];
+    rows.forEach(tr => {
+        const scoreCell = tr.querySelector('td[data-label="Score"]');
+        if(scoreCell){
+            const val = parseFloat(scoreCell.textContent);
+            if(!isNaN(val)) scores.push(val);
+        }
+    });
+    document.getElementById('totalCount').textContent = scores.length || '0';
+    if(scores.length > 0){
+        const avg = (scores.reduce((a,b) => a+b, 0) / scores.length).toFixed(1);
+        document.getElementById('avgScore').textContent  = avg;
+        document.getElementById('highScore').textContent = Math.max(...scores);
+        document.getElementById('lowScore').textContent  = Math.min(...scores);
+    } else {
+        document.getElementById('avgScore').textContent  = '—';
+        document.getElementById('highScore').textContent = '—';
+        document.getElementById('lowScore').textContent  = '—';
+    }
+}
+
+function fetchResults(){
+    const search = encodeURIComponent(searchInput.value.trim());
+    const course = encodeURIComponent(courseSelect.value);
+    showLoading();
+    fetch(`fetch_results.php?search=${search}&course=${course}`)
+        .then(res => {
+            if(!res.ok) throw new Error('Server error');
+            return res.text();
+        })
+        .then(html => {
+            hideLoading();
+            resultsBody.innerHTML = html;
+            const rows = resultsBody.querySelectorAll('tr[data-index]');
+            rows.forEach((tr, i) => {
+                const numCell = tr.querySelector('td.row-num');
+                if(numCell) numCell.textContent = i + 1;
+            });
+            updateSummary(resultsBody.querySelectorAll('tr'));
+        })
+        .catch(err => {
+            hideLoading();
+            resultsBody.innerHTML = `
+                <tr>
+                    <td colspan="8" class="text-center text-danger py-4">
+                        <i class="bi bi-exclamation-triangle-fill me-2"></i>
+                        Error loading results. Please try again.
+                    </td>
+                </tr>`;
+            console.error(err);
+        });
+}
+
+function clearFilters(){
+    searchInput.value  = '';
+    courseSelect.value = '';
+    fetchResults();
+}
+
+searchInput.addEventListener('input', () => {
+    clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(fetchResults, 350);
+});
+courseSelect.addEventListener('change', fetchResults);
+fetchResults();
+</script>
+
+<?php include "../includes/footer.php"; ?>
